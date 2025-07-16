@@ -6,6 +6,27 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+
+  <script>
+    // Define the HybridWebView bridge
+    window.HybridWebView = {
+      InvokeDotNet: function (methodName, args) {
+        if (typeof window.invokeCSharpAction !== "function") {
+          console.warn("invokeCSharpAction is not defined yet.");
+          return;
+        }
+
+        if (args === undefined) {
+          window.invokeCSharpAction(methodName);
+        } else {
+          window.invokeCSharpAction(JSON.stringify({
+            method: methodName,
+            arguments: args
+          }));
+        }
+      }
+    };
+  </script>
 </head>
 <body>
   <app-root></app-root>
