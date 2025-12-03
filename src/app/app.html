@@ -141,3 +141,8 @@
     </button>
   </div>
 </div>
+<app-confirm-dialog *ngIf="message"
+                    [message]="message"
+                    (onConfirm)="handleConfirm($event)">
+</app-confirm-dialog>
+

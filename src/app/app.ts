@@ -3,6 +3,9 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Todo } from './todo.interface';
 import { NgZone } from '@angular/core';
+import { ConfirmService } from './shared/confirm';
+import { ConfirmDialog } from './shared/confirm-dialog/confirm-dialog';
+
 
 // declare global {
 //   interface Window {
@@ -28,7 +31,7 @@ declare global {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ConfirmDialog],
   templateUrl: './app.html',
   styleUrls: ['./app.css'],
 })
@@ -39,13 +42,24 @@ export class AppComponent {
   editingTodo: Todo | null = null;
   currentFilter: 'all' | 'pending' | 'completed' = 'all';
   nextId: number = 1;
+  message: string | null = null;
+  resolver: ((value: boolean) => void) | null = null;
 
-  constructor(private ngZone: NgZone) {
+  constructor(private ngZone: NgZone, private confirmService: ConfirmService) {
     this.hookGlobalSetData();
+    this.confirmService.message$.subscribe(msg => this.message = msg);
+    this.confirmService.confirm$.subscribe(res => this.resolver = res);
   }
 
   ngOnInit() {
     this.loadTodosFromDotNet();
+  }
+
+  handleConfirm(result: boolean) {
+    if (this.resolver) {
+      this.resolver(result);
+    }
+    this.message = null;
   }
 
   private waitForHybridBridge(): Promise<void> {
@@ -198,9 +212,15 @@ export class AppComponent {
   }
 
   // Delete
-  deleteTodo(id: number) {
-    console.log('CLICKED ID:', id);
-    console.log('TODO KEYS:', Object.keys(this.todos[0]));
+  async deleteTodo(id: number) {
+    const ok = await this.confirmService.confirm(
+    'Are you sure you want to delete this todos?'
+  );
+
+  if (!ok) {
+    console.log("Cancelled.");
+    return;
+  }
 
     const todo = this.todos.find((t) => t.id === id);
     this.todos = this.todos.filter((t) => t.id !== id);
@@ -208,30 +228,50 @@ export class AppComponent {
     if (todo && window.HybridWebView?.InvokeDotNet) {
       window.HybridWebView.InvokeDotNet('RemoveTodoById', id.toString());
     }
-    // console.log('filter todos:', this.todos);
+    
+  }
 
-    //   const todo = this.todos.find((t) => t.Id === id);
-    //   this.todos = this.todos.filter((todo) => todo.Id !== id);
-    //   console.log('filter todos:', this.todos);
+  markAllComplete() {
+    this.todos.forEach((todo) => (todo.isCompleted = true));
+    //this.saveTodos();
+  }
 
-    //   console.log('Deleting todo with id:', id);
+async clearCompleted() {
 
-    //   if (todo && window.HybridWebView?.InvokeDotNet) {
-    //     window.HybridWebView.InvokeDotNet('RemoveTodoById', id.toString());
-    //     console.log('Removed todo:', todo);
-    //   }
-    // if (confirm('Are you sure you want to delete this todo?')) {
-    //   console.log('filter todos:', this.todos);
+  const ok = await this.confirmService.confirm(
+    'Are you sure you want to clear all completed todos?'
+  );
 
-    //   const todo = this.todos.find((t) => t.Id === id);
-    //   this.todos = this.todos.filter((todo) => todo.Id !== id);
-    //   console.log('filter todos:', this.todos);
+  if (!ok) {
+    console.log("Cancelled.");
+    return;
+  }
+   
+   
+      if (window.HybridWebView?.InvokeDotNet) {
+        window.HybridWebView.InvokeDotNet('ClearCompleted');
+      }
+    
+  }
 
-    //   if (todo && window.HybridWebView?.InvokeDotNet) {
-    //     window.HybridWebView.InvokeDotNet('RemoveTodoById', { id: todo.Id });
-    //     console.log('Removed todo:', todo);
-    //   }
+  async clearAll() {
+    const ok = await this.confirmService.confirm(
+    'Are you sure you want to clear all todos?'
+  );
 
+  if (!ok) {
+    console.log("Cancelled.");
+    return;
+  }
+
+    this.todos = [];
+    if (window.HybridWebView?.InvokeDotNet) {
+      console.log('Clearing all todos via .NET');
+      window.HybridWebView.InvokeDotNet('ClearAll');
+    }
+    // if (confirm('Are you sure you want to clear all todos?')) {
+    //   this.todos = [];
+    //   //this.saveTodos();
     // }
   }
 
@@ -276,31 +316,7 @@ export class AppComponent {
     }
   }
 
-  markAllComplete() {
-    this.todos.forEach((todo) => (todo.isCompleted = true));
-    //this.saveTodos();
-  }
-
-clearCompleted() {
-   
-    if (confirm('Are you sure you want to clear all completed todos?')) {
-      if (window.HybridWebView?.InvokeDotNet) {
-        window.HybridWebView.InvokeDotNet('ClearCompleted');
-      }
-    }
-  }
-
-  clearAll() {
-    this.todos = [];
-    if (window.HybridWebView?.InvokeDotNet) {
-      console.log('Clearing all todos via .NET');
-      window.HybridWebView.InvokeDotNet('ClearAll');
-    }
-    // if (confirm('Are you sure you want to clear all todos?')) {
-    //   this.todos = [];
-    //   //this.saveTodos();
-    // }
-  }
+  
 
   trackByTodo(index: number, todo: Todo): number {
     return todo.id;
