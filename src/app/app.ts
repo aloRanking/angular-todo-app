@@ -2,14 +2,26 @@ import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Todo } from './todo.interface';
+import { NgZone } from '@angular/core';
 
-
+// declare global {
+//   interface Window {
+//     invokeCSharpAction?: (arg: string) => void;
+//     HybridWebView?: {
+//       InvokeDotNet: (methodName: string, args?: any) => void;
+//     };
+//   }
+// }
 declare global {
   interface Window {
-    invokeCSharpAction?: ((arg: string) => void);
+    // Declaring the object injected by the MAUI host
     HybridWebView?: {
       InvokeDotNet: (methodName: string, args?: any) => void;
+      // You can add other functions from the bridge here if you use them,
+      // but 'InvokeDotNet' is the essential outbound method.
     };
+    // Declaring the function implemented by Angular that the C# host calls (inbound method)
+    globalSetData: (items: any[]) => void;
   }
 }
 
@@ -18,7 +30,7 @@ declare global {
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './app.html',
-  styleUrls: ['./app.css']
+  styleUrls: ['./app.css'],
 })
 export class AppComponent {
   todos: Todo[] = [];
@@ -28,49 +40,89 @@ export class AppComponent {
   currentFilter: 'all' | 'pending' | 'completed' = 'all';
   nextId: number = 1;
 
-  // constructor() {
-  //   // Load todos from localStorage on init
-  //   this.loadTodos();
-  // }
-  constructor() {
-  this.hookGlobalSetData();
-  this.waitForHybridBridge().then(() => {
-  this.loadTodosFromDotNet();
-});
-}
+  constructor(private ngZone: NgZone) {
+    this.hookGlobalSetData();
+  }
 
+  ngOnInit() {
+    this.loadTodosFromDotNet();
+  }
 
-private waitForHybridBridge(): Promise<void> {
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      const isReady =
-        typeof window !== "undefined" &&
-        typeof window.invokeCSharpAction === "function" &&
-        typeof window.HybridWebView?.InvokeDotNet === "function";
+  private waitForHybridBridge(): Promise<void> {
+    return new Promise((resolve) => {
+      // 🚨 CRITICAL FIX 2: Increase the check interval
+      const interval = setInterval(() => {
+        const isReady =
+          typeof window !== 'undefined' &&
+          typeof (window as any).invokeCSharpAction === 'function';
 
-      if (isReady) {
-        console.log("HybridWebView is ready");
-        clearInterval(interval);
-        resolve();
-      } else {
-        console.log("Waiting for HybridWebView...");
-      }
-    }, 100); // Check every 100ms
-  });
-}
+        if (isReady) {
+          console.log('HybridWebView is fully ready');
+          clearInterval(interval);
+          resolve();
+        } else {
+          // This log should now be less frequent
+          console.log('Waiting for HybridWebView...');
+        }
+      }, 250); // Check every 250ms (up from 100ms)
+    });
+  }
+
+  loadTodosFromDotNet() {
+    if (window.HybridWebView?.InvokeDotNet) {
+      console.log('Requesting todos from .NET');
+      window.HybridWebView.InvokeDotNet('GetTodoItems');
+    } else {
+      console.warn('HybridWebView.InvokeDotNet not available');
+    }
+  }
+
+  hookGlobalSetData() {
+    (window as any).globalSetData = (items: any[]) => {
+      console.log('Received items from MAUI:', JSON.stringify(items, null, 2));
+
+      // 3. CRITICAL FIX: Run inside Angular's Zone
+      this.ngZone.run(() => {
+        if (!Array.isArray(items)) return;
+
+        this.todos = items.map((item) => ({
+          id: item.id ?? 0,
+          title: item.title ?? '',
+          description: item.description ?? '',
+          isCompleted: item.isCompleted ?? false,
+          createdAt: item.createdAt ? new Date(item.createdAt) : new Date(),
+        }));
+
+        console.log('UI Updated with count:', this.todos.length);
+        console.log('UI Updated with:', JSON.stringify(this.todos, null, 2));
+
+        // Recalculate IDs
+        const maxId =
+          this.todos.length > 0 ? Math.max(...this.todos.map((t) => t.id)) : 0;
+        this.nextId = maxId + 1;
+      });
+    };
+  }
+
   // Create
   saveTodo() {
     if (!this.todoTitle.trim()) return;
 
-    console.log("Saving todo:", this.todos.toString());
+    console.log('Saving todo:', this.todos.toString());
 
     if (this.editingTodo) {
       // Update existing todo
       this.editingTodo.title = this.todoTitle.trim();
       this.editingTodo.description = this.todoDescription.trim();
       if (window.HybridWebView?.InvokeDotNet) {
-  window.HybridWebView.InvokeDotNet("UpdateDesc", this.editingTodo);
-}
+        const newTodoPascal = this.toPascalCaseKeys(this.editingTodo);
+        console.log(
+          'New todo Pascal addedwith invoke:',
+          JSON.stringify(newTodoPascal, null, 2)
+        );
+
+        window.HybridWebView.InvokeDotNet('UpdateDesc', newTodoPascal);
+      }
       this.editingTodo = null;
     } else {
       // Create new todo
@@ -78,31 +130,48 @@ private waitForHybridBridge(): Promise<void> {
         id: this.nextId++,
         title: this.todoTitle.trim(),
         description: this.todoDescription.trim(),
-        completed: false,
-        createdAt: new Date()
+        isCompleted: false,
+        createdAt: new Date(),
       };
       this.todos.push(newTodo);
+      console.log('New todo added locally:', JSON.stringify(newTodo, null, 2));
 
       if (window.HybridWebView?.InvokeDotNet) {
-        console.log("Adding todo:", newTodo);
-    window.HybridWebView.InvokeDotNet("AddTodo", newTodo);
+        const newTodoPascal = this.toPascalCaseKeys(newTodo);
+        console.log(
+          'New todo Pascal addedwith invoke:',
+          JSON.stringify(newTodoPascal, null, 2)
+        );
 
-    console.log("Added todo:", newTodo);
-  }
+        window.HybridWebView.InvokeDotNet('AddTodo', newTodoPascal);
+
+        console.log('Added todo:', newTodo);
+      }
     }
 
     this.todoTitle = '';
     this.todoDescription = '';
-    //this.saveTodos();
+   
+  }
+
+  toPascalCaseKeys(obj: any) {
+    const result: any = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        const pascalKey = key.charAt(0).toUpperCase() + key.slice(1);
+        result[pascalKey] = obj[key];
+      }
+    }
+    return result;
   }
 
   // Read
   getFilteredTodos(): Todo[] {
     switch (this.currentFilter) {
       case 'completed':
-        return this.todos.filter(todo => todo.completed);
+        return this.todos.filter((todo) => todo.isCompleted);
       case 'pending':
-        return this.todos.filter(todo => !todo.completed);
+        return this.todos.filter((todo) => !todo.isCompleted);
       default:
         return this.todos;
     }
@@ -116,28 +185,54 @@ private waitForHybridBridge(): Promise<void> {
   }
 
   toggleComplete(todo: Todo) {
-    todo.completed = !todo.completed;
+    todo.isCompleted = !todo.isCompleted;
     if (window.HybridWebView?.InvokeDotNet) {
-    window.HybridWebView.InvokeDotNet("UpdateDesc", todo);
-    console.log("Updated todo:", todo);
-  }
+       const newTodoPascal = this.toPascalCaseKeys(todo);
+        console.log(
+          'New todo Pascal addedwith invoke:',
+          JSON.stringify(newTodoPascal, null, 2)
+        );
+      window.HybridWebView.InvokeDotNet('UpdateDesc', newTodoPascal);
+      console.log('Updated todo:', newTodoPascal);
+    }
   }
 
   // Delete
   deleteTodo(id: number) {
-    if (confirm('Are you sure you want to delete this todo?')) {
-      console.log("filter todos:", this.todos);
+    console.log('CLICKED ID:', id);
+    console.log('TODO KEYS:', Object.keys(this.todos[0]));
 
-      const todo = this.todos.find(t => t.id === id);
-    this.todos = this.todos.filter(todo => todo.id !== id);
-    console.log("filter todos:", this.todos);
+    const todo = this.todos.find((t) => t.id === id);
+    this.todos = this.todos.filter((t) => t.id !== id);
 
     if (todo && window.HybridWebView?.InvokeDotNet) {
-      window.HybridWebView.InvokeDotNet("RemoveTodoById", todo.id);
-      console.log("Removed todo:", todo);
+      window.HybridWebView.InvokeDotNet('RemoveTodoById', id.toString());
     }
-      //this.saveTodos();
-    }
+    // console.log('filter todos:', this.todos);
+
+    //   const todo = this.todos.find((t) => t.Id === id);
+    //   this.todos = this.todos.filter((todo) => todo.Id !== id);
+    //   console.log('filter todos:', this.todos);
+
+    //   console.log('Deleting todo with id:', id);
+
+    //   if (todo && window.HybridWebView?.InvokeDotNet) {
+    //     window.HybridWebView.InvokeDotNet('RemoveTodoById', id.toString());
+    //     console.log('Removed todo:', todo);
+    //   }
+    // if (confirm('Are you sure you want to delete this todo?')) {
+    //   console.log('filter todos:', this.todos);
+
+    //   const todo = this.todos.find((t) => t.Id === id);
+    //   this.todos = this.todos.filter((todo) => todo.Id !== id);
+    //   console.log('filter todos:', this.todos);
+
+    //   if (todo && window.HybridWebView?.InvokeDotNet) {
+    //     window.HybridWebView.InvokeDotNet('RemoveTodoById', { id: todo.Id });
+    //     console.log('Removed todo:', todo);
+    //   }
+
+    // }
   }
 
   // Utility methods
@@ -152,11 +247,11 @@ private waitForHybridBridge(): Promise<void> {
   }
 
   getCompletedCount(): number {
-    return this.todos.filter(todo => todo.completed).length;
+    return this.todos.filter((todo) => todo.isCompleted).length;
   }
 
   getPendingCount(): number {
-    return this.todos.filter(todo => !todo.completed).length;
+    return this.todos.filter((todo) => !todo.isCompleted).length;
   }
 
   getEmptyMessage(): string {
@@ -182,23 +277,29 @@ private waitForHybridBridge(): Promise<void> {
   }
 
   markAllComplete() {
-    this.todos.forEach(todo => todo.completed = true);
+    this.todos.forEach((todo) => (todo.isCompleted = true));
     //this.saveTodos();
   }
 
-  clearCompleted() {
+clearCompleted() {
+   
     if (confirm('Are you sure you want to clear all completed todos?')) {
       if (window.HybridWebView?.InvokeDotNet) {
-      window.HybridWebView.InvokeDotNet("ClearCompleted");
-    }
+        window.HybridWebView.InvokeDotNet('ClearCompleted');
+      }
     }
   }
 
   clearAll() {
-    if (confirm('Are you sure you want to clear all todos?')) {
-      this.todos = [];
-      //this.saveTodos();
+    this.todos = [];
+    if (window.HybridWebView?.InvokeDotNet) {
+      console.log('Clearing all todos via .NET');
+      window.HybridWebView.InvokeDotNet('ClearAll');
     }
+    // if (confirm('Are you sure you want to clear all todos?')) {
+    //   this.todos = [];
+    //   //this.saveTodos();
+    // }
   }
 
   trackByTodo(index: number, todo: Todo): number {
@@ -214,48 +315,16 @@ private waitForHybridBridge(): Promise<void> {
   private loadTodos() {
     const savedTodos = localStorage.getItem('todos');
     const savedNextId = localStorage.getItem('nextId');
-    
+
     if (savedTodos) {
       this.todos = JSON.parse(savedTodos).map((todo: any) => ({
         ...todo,
-        createdAt: new Date(todo.createdAt)
+        createdAt: new Date(todo.createdAt),
       }));
     }
-    
+
     if (savedNextId) {
       this.nextId = parseInt(savedNextId);
     }
   }
-
-  loadTodosFromDotNet() {
-  if (window.HybridWebView?.InvokeDotNet) {
-    console.log("Requesting todos from .NET");
-    window.HybridWebView.InvokeDotNet("GetTodoItems");
-  } else {
-    console.warn("HybridWebView.InvokeDotNet not available");
-  }
-}
-
-hookGlobalSetData() {
-  // Make sure 'this' context remains bound
-  (window as any).globalSetData = (items: any[]) => {
-    if (!Array.isArray(items)) return;
-
-    console.log("Received items from .NET:", items );
-
-    this.todos = items.map((item) => ({
-      id: item.Id ?? 0,
-      title: item.Title ?? '',
-      description: item.Description ?? '',
-      completed: item.isCompleted ?? false,
-      createdAt: item.CreatedAt ? new Date(item.CreatedAt) : new Date() 
-    }));
-
-    console.log("Todos loaded from .NET:", this.todos);
-
-    // Also update nextId (optional but useful for keeping ID serial)
-    const maxId = this.todos.length > 0 ? Math.max(...this.todos.map(t => t.id)) : 0;
-    this.nextId = maxId + 1;
-  };
-}
 }

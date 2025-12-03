@@ -94,14 +94,14 @@
     <div
       *ngFor="let todo of getFilteredTodos(); trackBy: trackByTodo"
       class="todo-item"
-      [class.completed]="todo.completed"
+      [class.completed]="todo.isCompleted"
     >
       <div class="todo-content">
         <div class="todo-header">
           <h3>{{ todo.title }}</h3>
           <div class="todo-actions">
             <button (click)="toggleComplete(todo)" class="btn btn-toggle">
-              {{ todo.completed ? 'Mark Incomplete' : 'Mark Complete' }}
+              {{ todo.isCompleted ? 'Mark Incomplete' : 'Mark Complete' }}
             </button>
             <button (click)="editTodo(todo)" class="btn btn-edit">
               Edit
@@ -117,8 +117,8 @@
         </p>
         
         <div class="todo-meta">
-          <span class="status" [class.completed]="todo.completed">
-            {{ todo.completed ? 'Completed' : 'Pending' }}
+          <span class="status" [class.completed]="todo.isCompleted">
+            {{ todo.isCompleted ? 'Completed' : 'Pending' }}
           </span>
           <span class="created-date">
             Created: {{ todo.createdAt | date:'short' }}
